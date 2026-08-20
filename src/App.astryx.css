@@ -1,0 +1,25 @@
+/* src/App.astryx.css — 관리자 화면 공통 껍데기. sdij-wiki App.astryx.css 의 관련 부분만 포팅.
+ * 색은 Astryx 토큰만. */
+.cs-shell {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 72rem;
+  padding: var(--spacing-6) var(--spacing-4);
+}
+@media (min-width: 640px)  { .cs-shell { padding: var(--spacing-6); } }
+@media (min-width: 1024px) { .cs-shell { padding: var(--spacing-8); } }
+@media (min-width: 1440px) { .cs-shell { max-width: 88rem; } }
+@media (min-width: 1800px) { .cs-shell { max-width: 104rem; } }
+
+.cs-row-between { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-2); }
+.cs-cardhead { padding: var(--spacing-4) var(--spacing-5); }
+.cs-cardbody { padding: var(--spacing-4) var(--spacing-5); }
+.cs-cardhead.cs-row-between { align-items: flex-start; gap: var(--spacing-3); }
+.cs-cardhead.cs-row-between > button { flex: none; }
+
+/* 표 헤더 글자 잘림 방지(sdij-wiki 실측 대응) — 폭이 부족할 때만 두 줄로 흐르게 한다. */
+.astryx-table-header-cell {
+  white-space: normal !important;
+  text-overflow: clip !important;
+  word-break: keep-all;
+}

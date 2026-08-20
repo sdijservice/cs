@@ -1,0 +1,86 @@
+/**
+ * src/index.css — 전역 베이스 스타일 (순수 CSS, Tailwind 없음).
+ * Astryx reset.css 전역 적용 + 한국어 폰트 + 라이트/다크 색 토큰.
+ */
+@import '@astryxdesign/core/reset.css';
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('/fonts/PretendardVariable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.157 0 0);
+  --muted: oklch(0.967 0.001 286.375);
+  --primary: oklch(0.392 0.198 268.5);
+  --ring: oklch(0.392 0.198 268.5);
+  --font-sans: 'Pretendard', ui-sans-serif, system-ui, -apple-system,
+               BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: 'Pretendard', ui-sans-serif, system-ui, -apple-system,
+                  BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas',
+               'Liberation Mono', monospace;
+}
+
+.dark {
+  --background: oklch(0.157 0 0);
+  --foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --primary: oklch(0.55 0.218 268);
+  --ring: oklch(0.55 0.218 268);
+}
+
+html {
+  scrollbar-gutter: stable;
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-feature-settings: "ss01", "ss02", "cv11";
+  text-rendering: optimizeLegibility;
+}
+
+:where(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-heading);
+  letter-spacing: -0.01em;
+}
+
+:where(p, li, td, th, dd, dt) {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--primary) 15%, transparent);
+  color: var(--foreground);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+button:not(:disabled):not([aria-disabled="true"]),
+[role="button"]:not([aria-disabled="true"]),
+label[for],
+summary,
+a[href] {
+  cursor: pointer;
+}
+button:disabled,
+button[aria-disabled="true"],
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+}

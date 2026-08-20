@@ -1,0 +1,56 @@
+/* CollectPage 전용 레이아웃. Card 가 자체 padding 을 가지므로 여기서 다시 주지 않는다. */
+.collect-page {
+  padding: var(--spacing-6);
+  max-width: 860px;
+}
+
+/* 북마크 막대로 끌어다 놓는 링크. 버튼처럼 보이지만 실제 <a> 여야 드래그가 된다. */
+.collect-bmk {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-background-secondary);
+  color: var(--color-text-primary);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+  text-decoration: none;
+  cursor: grab;
+  user-select: none;
+}
+.collect-bmk:active { cursor: grabbing; }
+
+.collect-sql {
+  margin: 0;
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-secondary);
+  color: var(--color-text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.collect-steps,
+.collect-notes {
+  margin: 0;
+  /* Astryx 리셋이 목록 기호를 지우므로 여기서 다시 켠다. 순서가 뜻을 갖는 목록이라 번호가 필요하다. */
+  padding-inline-start: 1.35em;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.8;
+}
+.collect-steps { list-style: decimal }
+.collect-notes { list-style: disc }
+.collect-steps li,
+.collect-notes li { display: list-item }
+
+.collect-steps li + li,
+.collect-notes li + li { margin-top: var(--spacing-1); }
+.collect-steps b,
+.collect-notes b { color: var(--color-text-primary); }
