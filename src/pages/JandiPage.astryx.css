@@ -1,0 +1,107 @@
+/* src/pages/JandiPage.astryx.css
+ * 잔디 대화 뷰어 — Astryx 표면. 색·라운드·쉐도우는 전부 Astryx 토큰(var)만 사용.
+ * sdij-wiki AdminJandiPage.astryx.css 포팅본 — 실시간 위젯용 2열 분석 영역만 제외했다. */
+
+/* ─── KPI 카드 (상담 화면과 동일 스펙) ──────────────────── */
+.aj-kpi {
+  display: flex; flex-direction: column; gap: var(--spacing-3);
+}
+.aj-kpi-head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-2); }
+.aj-kpi-icon { color: var(--color-icon-secondary); flex: none; }
+.aj-kpi-value {
+  display: flex; align-items: baseline; gap: var(--spacing-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── 툴바: 채널 탭 + 기간 Selector + 검색 (상담 화면과 동일 스펙) ── */
+.aj-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-3);
+}
+.aj-tabs { display: flex; flex-wrap: wrap; gap: var(--spacing-1-5); }
+.aj-selects { display: flex; align-items: center; gap: var(--spacing-1-5); }
+.aj-search { flex: 1 1 240px; min-width: 200px; margin-left: auto; }
+
+@media (max-width: 640px) {
+  .aj-tabs {
+    overflow-x: auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .aj-tabs > * {
+    width: max-content;
+    flex: none;
+  }
+}
+
+/* ─── 결과 카드 ─────────────────────────────────────────────────
+   여백·정렬은 공용 .cs-cardhead / .cs-cardbody / .cs-row-between 가 담당한다.
+   상담 화면(.ac-panel)과 같은 값을 쓰도록 한 곳에 모았다. */
+.aj-main { overflow: hidden; }
+.aj-main-head { flex-wrap: wrap; align-items: center; }
+.aj-main-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--spacing-2); min-width: 0; }
+.aj-main-actions { display: flex; align-items: center; gap: var(--spacing-2); flex-wrap: wrap; }
+
+/* ─── 스레드 카드 (상담 화면과 동일 스펙) ── */
+.aj-thread {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  overflow: hidden;
+  background: var(--color-background-body);
+}
+.aj-thread-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+  background: var(--color-background-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.aj-thread-head-l { display: flex; align-items: flex-start; gap: var(--spacing-2); min-width: 0; }
+.aj-thread-who { flex: none; max-width: 160px; overflow: hidden; }
+.aj-thread-title { min-width: 0; }
+.aj-thread-meta {
+  display: flex; align-items: center; gap: var(--spacing-3);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .aj-thread-head { flex-wrap: wrap; row-gap: var(--spacing-1); }
+  .aj-thread-head-l { flex: 1 1 100%; flex-wrap: wrap; row-gap: var(--spacing-1); }
+  .aj-thread-title { flex: 1 1 100%; }
+}
+
+/* ─── 메시지 리스트 ───────────────────────────────────────────── */
+.aj-msglist { list-style: none; margin: 0; padding: var(--spacing-0-5) var(--spacing-3); }
+.aj-msg {
+  display: flex; align-items: flex-start; gap: var(--spacing-3);
+  padding: var(--spacing-1) var(--spacing-1);
+}
+.aj-msg + .aj-msg { border-top: 1px solid var(--color-border); }
+.aj-msg-reply {
+  padding-left: var(--spacing-3);
+  border-radius: var(--radius-inner);
+  background: color-mix(in oklab, var(--color-text-primary) 3%, transparent);
+}
+.aj-msg-time {
+  display: inline-block; width: 80px; flex: none;
+  padding-top: var(--spacing-0-5);
+}
+.aj-msg-who { flex: none; margin-top: 1px; max-width: 150px; overflow: hidden; }
+.aj-msg-tag {
+  flex: none; margin-top: var(--spacing-0-5);
+  font-size: 12px; color: var(--color-text-secondary);
+}
+.aj-msg-body {
+  min-width: 0; flex: 1 1 auto;
+  white-space: pre-wrap; word-break: break-word;
+  font-size: 14px; color: var(--color-text-primary);
+}
+
+@media (max-width: 640px) {
+  .aj-msg { flex-wrap: wrap; gap: var(--spacing-1) var(--spacing-2); }
+  .aj-msg-time { width: auto; padding-top: 0; }
+  .aj-msg-who { margin-top: 0; }
+  .aj-msg-tag { margin-top: 0; }
+}
+.aj-msg-empty { color: var(--color-text-secondary); }
+
+.aj-more { margin-top: var(--spacing-4); }

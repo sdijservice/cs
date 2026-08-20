@@ -1,0 +1,17 @@
+/* src/pages/LoginPage.astryx.css — 색·간격은 전부 Astryx 토큰(var)만 사용 */
+.login-shell {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-6);
+  /* ⚠️ --color-background-secondary 는 Astryx 에 없는 토큰이라 배경이 아예 안 칠해졌었다.
+     실제로 있는 토큰은 --color-background-body / -card / -surface / -muted 등이다.
+     없는 변수를 쓰면 CSS 는 오류 없이 조용히 무시하므로 눈으로만 봐서는 못 잡는다. */
+  background: var(--color-background-body);
+}
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  padding: var(--spacing-8) var(--spacing-6);
+}

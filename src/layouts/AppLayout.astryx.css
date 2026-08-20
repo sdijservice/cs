@@ -1,0 +1,25 @@
+/* src/layouts/AppLayout.astryx.css — 색은 Astryx 토큰만 */
+
+.cs-brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px;
+  color: var(--color-text-primary);
+  text-decoration: none;
+  transition: opacity .12s ease;
+}
+.cs-brand:hover { opacity: .8; }
+.cs-brand-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex: none;
+  border-radius: var(--radius-inner);
+  background: var(--color-background-inverse, var(--color-text-primary));
+  color: var(--color-background-body);
+}
+.cs-brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+.cs-brand-title { font-size: 14px; font-weight: 600; color: var(--color-text-primary); }
+.cs-brand-sub { font-size: 12px; color: var(--color-text-secondary); }
+
+.cs-user-email { font-size: 14px; color: var(--color-text-secondary); }
+.cs-topnav-actions { display: inline-flex; align-items: center; gap: var(--spacing-2); }
+
+.cs-content { width: 100%; min-height: 100%; }
