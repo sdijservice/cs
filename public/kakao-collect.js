@@ -23,8 +23,10 @@
   var INTERVAL_MS = 5 * 60 * 1000
   var CHATS_PAGE = 100          // 카카오가 한 번에 주는 최대치(size 를 올려도 100에서 잘린다)
   var LOGS_PAGE = 200
-  var MAX_CHANGED_PER_RUN = 40  // 최신 페이지에서 한 번에 훑을 방 수(카카오 쪽 부담)
-  var GAP_MS = 120              // 대화방 사이 간격
+  var MAX_LOGS_PER_RUN = 200    // 한 실행에서 내용까지 읽을 방 수(카카오 쪽 부담)
+  var MAX_BACKFILL_PAGES = 20   // 한 실행에서 목록을 과거로 훑을 페이지 수
+  var GAP_MS = 80               // 대화방 사이 간격
+  var PAGE_GAP_MS = 150         // 목록 페이지 사이 간격
 
   // 파트너센터 UI 가 목록을 부를 때 그대로 쓰는 본문. status 를 빼면 대상이 좁아질 수 있어
   // UI 와 똑같이 맞춘다.
@@ -187,47 +189,55 @@
     var cursors = state.cursors
     var backfill = state.backfill
 
-    // 목록은 last_log_id 내림차순이다. 그래서 두 갈래로 훑는다.
-    //   A) 첫 페이지 — 새 상담과 방금 바뀐 방은 항상 여기 올라온다.
-    //   B) 백필 한 페이지 — 저장된 지점부터 과거로 한 칸 더 내려간다.
-    // 목록 API 는 size 를 올려도 100개에서 자르므로, 과거는 이렇게 나눠 받는 수밖에 없다.
-    var seen = {}, order = []
-    function absorb(items) {
-      for (var i = 0; i < items.length; i++) {
-        var id = String(items[i].id)
-        if (!seen[id]) { seen[id] = items[i]; order.push(id) }
-      }
-    }
-
+    // 목록은 last_log_id 내림차순이다. 두 가지 일을 나눠서 한다.
+    //
+    //   A) 발견 — 목록을 과거로 여러 페이지 훑어 "이런 방이 있다"를 먼저 기록한다.
+    //      목록 조회는 100개당 요청 하나라 싸다. 그래서 한 실행에 여러 페이지를 돈다.
+    //   B) 내용 — 방 하나당 요청 하나라 비싸다. 그래서 한 실행에 정해진 수만큼만 읽는다.
+    //
+    // 둘을 분리한 이유가 핵심이다. 예전에는 한 페이지를 통째로 읽어내야만 진도를 넘겼는데,
+    // 페이지당 100개를 다 읽으려니 실행당 한 페이지밖에 못 갔다. 채널당 수천 개면 몇 시간이다.
+    // 발견만 먼저 달리게 하면 목록은 금방 끝나고, 내용은 그 뒤에 차근차근 채워진다.
+    //
+    // ⚠️ 발견으로 기록하는 방에는 last_log_id 를 넣지 않는다(서버가 null 로 넣는다).
+    //    커서가 없으면 "아직 안 받은 방"으로 남아 다음 실행이 반드시 내용을 읽으러 간다.
+    //    넣어버리면 "이미 받았다"고 오판해 그 상담이 영영 빠진다 — 646개 유실과 같은 구조다.
+    //    이 규칙 덕분에 목록 진도는 내용 수집 성공 여부와 무관하게 안전하게 전진할 수 있다.
     var top = await fetchChatPage(profileId, null)
-    absorb(top.items)
 
-    var bfPage = null, bfSince = null
-    if (!backfill.done) {
-      bfSince = backfill.cursor || oldestCursor(top.items)
-      if (bfSince) {
-        await sleep(GAP_MS)
-        bfPage = await fetchChatPage(profileId, bfSince)
-        absorb(bfPage.items)
+    var discovered = [], seenNew = {}
+    var since = backfill.cursor || oldestCursor(top.items)
+    var done = backfill.done
+    var pages = 0
+    while (!done && since && pages < MAX_BACKFILL_PAGES) {
+      await sleep(PAGE_GAP_MS)
+      var page = await fetchChatPage(profileId, since)
+      pages++
+      if (!page.items.length) { done = true; break }
+      for (var d = 0; d < page.items.length; d++) {
+        var did = String(page.items[d].id)
+        if (!seenNew[did]) { seenNew[did] = true; discovered.push(page.items[d]) }
       }
+      var next = oldestCursor(page.items)
+      if (!next || cmpBig(next, since) >= 0) { done = true; break }  // 더 못 내려가면 끝
+      since = next
+      if (page.hasNext === false) { done = true; break }
     }
 
+    // 내용을 읽을 대상: 최신 페이지에서 바뀐 방 + 아직 내용이 없는 방.
     function isChanged(it) {
       var last = it && it.last_log_id ? String(it.last_log_id) : null
       return !!last && cursors[String(it.id)] !== last
     }
-
-    // 첫 페이지는 상한을 둔다(평소 부담을 낮게). 백필 페이지는 전부 처리해야
-    // 커서를 그 페이지 끝까지 전진시킬 수 있으므로 상한을 두지 않는다.
     var picked = {}, targets = []
     function want(list) {
-      for (var i = 0; i < list.length; i++) {
+      for (var i = 0; i < list.length && targets.length < MAX_LOGS_PER_RUN; i++) {
         var id = String(list[i].id)
-        if (!picked[id]) { picked[id] = true; targets.push(list[i]) }
+        if (!picked[id] && isChanged(list[i])) { picked[id] = true; targets.push(list[i]) }
       }
     }
-    want(top.items.filter(isChanged).slice(0, MAX_CHANGED_PER_RUN))
-    if (bfPage) want(bfPage.items.filter(isChanged))
+    want(top.items)
+    want(discovered)
 
     var messages = []
     for (var i = 0; i < targets.length; i++) {
@@ -237,54 +247,40 @@
         var list = (logs && logs.items) || []
         for (var j = 0; j < list.length; j++) messages.push({ chat_id: chatId, log: list[j] })
       } catch (e) {
-        // 대화방 하나가 실패해도 나머지는 계속한다. 이 방의 커서는 그대로 두므로 다음 번에 다시 시도된다.
+        // 방 하나가 실패해도 나머지는 계속한다. 그 방의 커서는 그대로라 다음 번에 다시 시도된다.
         if (e.status === 401 || e.status === 403) throw e
         console.warn('[수집] 대화 내용 조회 실패', chatId, e.message)
       }
       await sleep(GAP_MS)
     }
 
-    // ⚠️ 바뀐 방을 못 가져왔으면 그 방의 메타(=마지막 메시지 번호)도 보내지 않는다.
-    //    보내버리면 서버 커서만 최신이 되어, 다음 실행이 "변경 없음"으로 오판해 그 내용을 영영 놓친다.
-    //    원본 시스템에서 이 순서를 어겨 646개 대화방의 메시지가 유실된 적이 있다.
+    // ⚠️ 내용을 못 가져온 방은 메타(=마지막 메시지 번호)도 보내지 않는다.
+    //    보내면 서버가 "여기까지 받았다"고 기록해, 다음 실행이 "변경 없음"으로 오판한다.
     var gotChat = {}
     messages.forEach(function (m) { gotChat[m.chat_id] = true })
-    var chats = order.map(function (id) { return seen[id] }).filter(function (it) {
+    //   규칙: 커서가 붙은 온전한 행은 "내용까지 받은 방"과 "애초에 바뀐 게 없는 방"만 올린다.
+    //   내용 읽기 상한에 걸려 이번에 못 읽은 방을 여기에 넣으면, 커서만 최신이 되어
+    //   다음 실행이 "변경 없음"으로 오판한다. 그 방들은 discovered 로만 올라가 커서가 비어 있고,
+    //   그래서 다음 실행이 반드시 다시 집어 든다.
+    var chats = top.items.concat(discovered).filter(function (it) {
       var cid = String(it.id)
-      return !picked[cid] || gotChat[cid]
+      if (gotChat[cid]) return true
+      return !isChanged(it)
     })
-
-    // ⚠️ 백필 커서는 "그 페이지를 실제로 다 받아냈을 때"만 전진시킨다.
-    //    한 방이라도 내용을 못 가져왔는데 커서를 넘기면 그 방은 다시 조회되지 않는다.
-    //    위의 유실 방지 규칙과 같은 이유다. 커서를 그대로 두면 다음 실행이 같은 페이지를
-    //    다시 훑고, 저장은 덮어쓰기라 중복이 생기지 않는다.
-    var nextBackfill = { cursor: backfill.cursor, done: backfill.done }
-    if (bfPage) {
-      if (!bfPage.items.length) {
-        nextBackfill = { cursor: bfSince, done: true }        // 더 과거가 없다
-      } else {
-        var missed = bfPage.items.filter(isChanged).some(function (it) { return !gotChat[String(it.id)] })
-        if (!missed) {
-          var nx = oldestCursor(bfPage.items)
-          var moved = nx && cmpBig(nx, bfSince) < 0
-          nextBackfill = moved
-            ? { cursor: nx, done: bfPage.hasNext === false }
-            : { cursor: bfSince, done: true }                 // 더 내려가지 못하면 끝난 것으로 본다
-        }
-      }
-    }
 
     var saved = await sendToServer(cfg, {
       profile_id: profileId,
       chats: chats,
+      discovered: discovered,   // 커서 없이 목록에만 올린다(내용은 나중에)
       messages: messages,
-      backfill: nextBackfill,
+      backfill: { cursor: since, done: done },
     })
     return Object.assign({
       profileId: profileId,
-      scanned: order.length,
+      scanned: top.items.length + discovered.length,
       changed: targets.length,
-      backfilling: !nextBackfill.done,
+      pages: pages,
+      backfilling: !done,
     }, saved)
   }
 
