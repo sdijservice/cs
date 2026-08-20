@@ -30,7 +30,7 @@ const supabase = createClient(SUPABASE_URL, SERVICE_KEY, {
 // 수집 대상 채널. 보내온 profile_id 가 이 목록에 없으면 통째로 거절한다.
 const ALLOWED_PROFILES = new Set(['_VGAQn', '_rcpPG', '_TkpPG', '_xfxilXn', '_rkbcn']);
 const MAX_MESSAGES_PER_CALL = 3000;
-const MAX_CHATS_PER_CALL = 500;
+const MAX_CHATS_PER_CALL = 3000;
 
 const log = (...a: unknown[]) => console.log(`[${new Date().toISOString()}]`, ...a);
 
@@ -203,6 +203,7 @@ Deno.serve(async (req: Request) => {
 
     const chats = Array.isArray(body?.chats) ? body.chats.slice(0, MAX_CHATS_PER_CALL) : [];
     const msgs = Array.isArray(body?.messages) ? body.messages.slice(0, MAX_MESSAGES_PER_CALL) : [];
+    const found = Array.isArray(body?.discovered) ? body.discovered.slice(0, MAX_CHATS_PER_CALL) : [];
 
     // ★★ 순서가 곧 데이터 안전이다. 메시지 먼저, 대화방 나중. 절대 바꾸지 말 것.
     //
@@ -230,12 +231,34 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // ★ 발견만 된 방: 커서(last_log_id)를 비워서 넣는다.
+    //   커서가 없으면 cursorsFor 가 이 방을 빼고, 수집기는 "아직 안 받은 방"으로 보아
+    //   다음 실행에 반드시 내용을 읽으러 간다. 커서를 채워 넣으면 "이미 받았다"고 오판해
+    //   그 상담이 영영 빠진다 — 646개 유실과 같은 구조다.
+    //   ignoreDuplicates 로 이미 있는 행은 건드리지 않는다(내용까지 받아둔 방의 커서를 지우면 안 된다).
+    let foundSaved = 0;
+    if (found.length) {
+      const rows = found
+        .map((c: any) => ({ ...chatToRow(c, profileId), last_log_id: null }))
+        .filter((r) => r.chat_id);
+      for (let i = 0; i < rows.length; i += 500) {
+        const slice = rows.slice(i, i + 500);
+        const { error } = await supabase.from('kakao_partner_chats')
+          .upsert(slice, { onConflict: 'chat_id', ignoreDuplicates: true });
+        if (error) return json({ error: 'discovered upsert: ' + error.message, messages: messagesSaved }, 500);
+        foundSaved += slice.length;
+      }
+    }
+
     let chatsSaved = 0;
     if (chats.length) {
       const rows = chats.map((c: any) => chatToRow(c, profileId)).filter((r) => r.chat_id);
-      const { error } = await supabase.from('kakao_partner_chats').upsert(rows, { onConflict: 'chat_id' });
-      if (error) return json({ error: 'chats upsert: ' + error.message, messages: messagesSaved }, 500);
-      chatsSaved = rows.length;
+      for (let i = 0; i < rows.length; i += 500) {
+        const slice = rows.slice(i, i + 500);
+        const { error } = await supabase.from('kakao_partner_chats').upsert(slice, { onConflict: 'chat_id' });
+        if (error) return json({ error: 'chats upsert: ' + error.message, messages: messagesSaved }, 500);
+        chatsSaved += slice.length;
+      }
     }
 
     // 누가·언제 넣었는지 기록해 "지금 수집이 살아 있나"를 화면에서 볼 수 있게 한다.
@@ -259,8 +282,8 @@ Deno.serve(async (req: Request) => {
       { onConflict: 'profile_id' },
     ).then(({ error }) => { if (error) log('heartbeat fail', error.message); });
 
-    log(`ingest ${profileId}: chats=${chatsSaved} messages=${messagesSaved}`);
-    return json({ ok: true, profile_id: profileId, chats: chatsSaved, messages: messagesSaved });
+    log(`ingest ${profileId}: chats=${chatsSaved} found=${foundSaved} messages=${messagesSaved}`);
+    return json({ ok: true, profile_id: profileId, chats: chatsSaved, discovered: foundSaved, messages: messagesSaved });
   } catch (e) {
     log('unhandled', String((e as Error)?.message ?? e));
     return json({ error: String((e as Error)?.message ?? e) }, 500);
