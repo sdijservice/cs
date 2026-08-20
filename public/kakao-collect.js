@@ -21,10 +21,14 @@
   var BASE = 'https://business.kakao.com'
   var CFG_KEY = 'sidae.collect.cfg'
   var INTERVAL_MS = 5 * 60 * 1000
-  var CHATS_PAGE = 100          // 카카오가 한 번에 주는 최대치
+  var CHATS_PAGE = 100          // 카카오가 한 번에 주는 최대치(size 를 올려도 100에서 잘린다)
   var LOGS_PAGE = 200
-  var MAX_CHANGED_PER_RUN = 40  // 한 번에 너무 많이 훑지 않는다(카카오 쪽 부담)
+  var MAX_CHANGED_PER_RUN = 40  // 최신 페이지에서 한 번에 훑을 방 수(카카오 쪽 부담)
   var GAP_MS = 120              // 대화방 사이 간격
+
+  // 파트너센터 UI 가 목록을 부를 때 그대로 쓰는 본문. status 를 빼면 대상이 좁아질 수 있어
+  // UI 와 똑같이 맞춘다.
+  var SEARCH_BODY = JSON.stringify({ is_blocked: false, status: 'all', keyword: '', labels: [] })
 
   // 시대인재 운영 채널 5개
   var PROFILES = [
@@ -83,6 +87,59 @@
     })
   }
 
+  // ⚠️ 대화방 목록의 last_log_id 는 19자리(약 3.9e18)라 자바스크립트 안전 정수(9.0e15)를 넘는다.
+  //    JSON.parse 로 숫자로 읽으면 값이 512 단위로 반올림되어 커서가 어긋나고, 그러면 페이지가
+  //    건너뛰어져 상담이 통째로 누락된다. 그래서 원문 텍스트에서 해당 키만 골라 문자열로 고정한 뒤 파싱한다.
+  //    (키 이름을 특정해 바꾸므로 대화 본문 안의 숫자는 건드리지 않는다.)
+  var BIGINT_KEYS = /"(last_log_id|last_seen_log_id|user_last_seen_log_id|id|version)":\s*(\d{16,})/g
+  function parseKeepingBigIds(text) {
+    return JSON.parse(String(text).replace(BIGINT_KEYS, '"$1":"$2"'))
+  }
+
+  /** 음이 아닌 정수 문자열 두 개를 크기 비교한다(숫자로 바꾸지 않는다). */
+  function cmpBig(a, b) {
+    a = String(a); b = String(b)
+    if (a.length !== b.length) return a.length < b.length ? -1 : 1
+    return a < b ? -1 : (a > b ? 1 : 0)
+  }
+
+  /** 대화방 목록 한 페이지. since 를 주면 그보다 과거 것만 온다(내림차순 커서). */
+  function fetchChatPage(profileId, since) {
+    var qs = '?size=' + CHATS_PAGE + (since ? '&since=' + encodeURIComponent(since) : '')
+    return fetch(BASE + '/api/profiles/' + profileId + '/chats/search' + qs, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'accept-language': 'ko-KR,ko;q=0.9,en;q=0.8',
+        'content-type': 'application/json',
+      },
+      body: SEARCH_BODY,
+    }).then(function (res) {
+      if (!res.ok) {
+        var err = new Error('HTTP ' + res.status + ' chats/search')
+        err.status = res.status
+        throw err
+      }
+      return res.text()
+    }).then(function (t) {
+      var j = parseKeepingBigIds(t)
+      return { items: (j && j.items) || [], hasNext: j ? j.has_next : undefined }
+    })
+  }
+
+  /** 페이지에서 가장 과거 지점(= 다음 페이지를 부를 커서). 최솟값을 쓰므로 건너뜀이 생기지 않는다. */
+  function oldestCursor(items) {
+    var min = null
+    for (var i = 0; i < items.length; i++) {
+      var v = items[i] && items[i].last_log_id
+      if (v === undefined || v === null || v === '') continue
+      var sv = String(v)
+      if (min === null || cmpBig(sv, min) < 0) min = sv
+    }
+    return min
+  }
+
   /** 파트너센터에 로그인되어 있고 권한이 있는지 확인. 실패 사유를 그대로 돌려준다. */
   function checkSession() {
     return kakao('/api/users/me').then(
@@ -92,14 +149,21 @@
   }
 
   // ─────────────────────────── 서버 주고받기 ───────────────────────────
-  /** 서버에 저장된 마지막 지점을 받아온다 — 이걸로 "바뀐 대화방"만 골라낸다. */
-  function fetchCursors(cfg, profileId) {
+  /** 서버에 저장된 마지막 지점과 백필 진도를 받아온다 — 이걸로 "바뀐 대화방"만 골라낸다. */
+  function fetchState(cfg, profileId) {
     var url = cfg.endpoint + '?token=' + encodeURIComponent(cfg.token) +
               '&profile_id=' + encodeURIComponent(profileId)
     return fetch(url).then(function (res) {
       if (!res.ok) throw new Error('커서 조회 실패 (' + res.status + ')')
-      return res.json()
-    }).then(function (j) { return (j && j.cursors) || {} })
+      return res.text()
+    }).then(function (t) {
+      var j = parseKeepingBigIds(t)
+      var bf = (j && j.backfill) || {}
+      return {
+        cursors: (j && j.cursors) || {},
+        backfill: { cursor: bf.cursor ? String(bf.cursor) : null, done: bf.done === true },
+      }
+    })
   }
 
   function sendToServer(cfg, payload) {
@@ -119,24 +183,55 @@
 
   // ─────────────────────────── 채널 하나 수집 ───────────────────────────
   async function collectProfile(cfg, profileId) {
-    var cursors = await fetchCursors(cfg, profileId)
+    var state = await fetchState(cfg, profileId)
+    var cursors = state.cursors
+    var backfill = state.backfill
 
-    var search = await kakao('/api/profiles/' + profileId + '/chats/search?size=' + CHATS_PAGE, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    })
-    var items = (search && Array.isArray(search.items)) ? search.items : []
+    // 목록은 last_log_id 내림차순이다. 그래서 두 갈래로 훑는다.
+    //   A) 첫 페이지 — 새 상담과 방금 바뀐 방은 항상 여기 올라온다.
+    //   B) 백필 한 페이지 — 저장된 지점부터 과거로 한 칸 더 내려간다.
+    // 목록 API 는 size 를 올려도 100개에서 자르므로, 과거는 이렇게 나눠 받는 수밖에 없다.
+    var seen = {}, order = []
+    function absorb(items) {
+      for (var i = 0; i < items.length; i++) {
+        var id = String(items[i].id)
+        if (!seen[id]) { seen[id] = items[i]; order.push(id) }
+      }
+    }
 
-    // 마지막 메시지 번호가 저장된 것과 다른 대화방 = 새 내용이 있는 곳
-    var changed = items.filter(function (it) {
+    var top = await fetchChatPage(profileId, null)
+    absorb(top.items)
+
+    var bfPage = null, bfSince = null
+    if (!backfill.done) {
+      bfSince = backfill.cursor || oldestCursor(top.items)
+      if (bfSince) {
+        await sleep(GAP_MS)
+        bfPage = await fetchChatPage(profileId, bfSince)
+        absorb(bfPage.items)
+      }
+    }
+
+    function isChanged(it) {
       var last = it && it.last_log_id ? String(it.last_log_id) : null
-      return last && cursors[String(it.id)] !== last
-    }).slice(0, MAX_CHANGED_PER_RUN)
+      return !!last && cursors[String(it.id)] !== last
+    }
+
+    // 첫 페이지는 상한을 둔다(평소 부담을 낮게). 백필 페이지는 전부 처리해야
+    // 커서를 그 페이지 끝까지 전진시킬 수 있으므로 상한을 두지 않는다.
+    var picked = {}, targets = []
+    function want(list) {
+      for (var i = 0; i < list.length; i++) {
+        var id = String(list[i].id)
+        if (!picked[id]) { picked[id] = true; targets.push(list[i]) }
+      }
+    }
+    want(top.items.filter(isChanged).slice(0, MAX_CHANGED_PER_RUN))
+    if (bfPage) want(bfPage.items.filter(isChanged))
 
     var messages = []
-    for (var i = 0; i < changed.length; i++) {
-      var chatId = String(changed[i].id)
+    for (var i = 0; i < targets.length; i++) {
+      var chatId = String(targets[i].id)
       try {
         var logs = await kakao('/api/profiles/' + profileId + '/chats/' + chatId + '/chatlogs?size=' + LOGS_PAGE)
         var list = (logs && logs.items) || []
@@ -154,15 +249,43 @@
     //    원본 시스템에서 이 순서를 어겨 646개 대화방의 메시지가 유실된 적이 있다.
     var gotChat = {}
     messages.forEach(function (m) { gotChat[m.chat_id] = true })
-    var changedIds = {}
-    changed.forEach(function (c) { changedIds[String(c.id)] = true })
-    var chats = items.filter(function (it) {
+    var chats = order.map(function (id) { return seen[id] }).filter(function (it) {
       var cid = String(it.id)
-      return !changedIds[cid] || gotChat[cid]
+      return !picked[cid] || gotChat[cid]
     })
 
-    var saved = await sendToServer(cfg, { profile_id: profileId, chats: chats, messages: messages })
-    return Object.assign({ profileId: profileId, scanned: items.length, changed: changed.length }, saved)
+    // ⚠️ 백필 커서는 "그 페이지를 실제로 다 받아냈을 때"만 전진시킨다.
+    //    한 방이라도 내용을 못 가져왔는데 커서를 넘기면 그 방은 다시 조회되지 않는다.
+    //    위의 유실 방지 규칙과 같은 이유다. 커서를 그대로 두면 다음 실행이 같은 페이지를
+    //    다시 훑고, 저장은 덮어쓰기라 중복이 생기지 않는다.
+    var nextBackfill = { cursor: backfill.cursor, done: backfill.done }
+    if (bfPage) {
+      if (!bfPage.items.length) {
+        nextBackfill = { cursor: bfSince, done: true }        // 더 과거가 없다
+      } else {
+        var missed = bfPage.items.filter(isChanged).some(function (it) { return !gotChat[String(it.id)] })
+        if (!missed) {
+          var nx = oldestCursor(bfPage.items)
+          var moved = nx && cmpBig(nx, bfSince) < 0
+          nextBackfill = moved
+            ? { cursor: nx, done: bfPage.hasNext === false }
+            : { cursor: bfSince, done: true }                 // 더 내려가지 못하면 끝난 것으로 본다
+        }
+      }
+    }
+
+    var saved = await sendToServer(cfg, {
+      profile_id: profileId,
+      chats: chats,
+      messages: messages,
+      backfill: nextBackfill,
+    })
+    return Object.assign({
+      profileId: profileId,
+      scanned: order.length,
+      changed: targets.length,
+      backfilling: !nextBackfill.done,
+    }, saved)
   }
 
   /** 5개 채널을 순서대로 수집. 로그인이 풀렸으면 즉시 멈춘다. */

@@ -177,3 +177,81 @@ Deno.test('저장에 성공하면 수집 상태를 남긴다 (장애를 눈치�
   const tables = captured.filter((c) => c.method === 'POST').map((c) => c.table);
   assert(tables.includes('kakao_partner_stream_state'), '수집 상태를 기록하지 않았다');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 대화방 목록 백필 진도
+// ─────────────────────────────────────────────────────────────────────────────
+// 목록 API 는 한 번에 100개까지만 준다. 과거 대화방은 since 커서로 나눠 받아야 하는데,
+// "어디까지 팠는지"를 여기 기록한다. 이 값이 실제로 저장한 것보다 앞서 나가면
+// 그 구간은 다시 조회되지 않는다 — 위의 유실 방지와 같은 종류의 사고다.
+
+/** stream_state 에 쓰인 내용을 꺼낸다(단건이든 배열이든 받아준다). */
+function stateWrites(): Array<Record<string, unknown>> {
+  return captured
+    .filter((c) => c.table === 'kakao_partner_stream_state' && c.method === 'POST')
+    .flatMap((c) => (Array.isArray(c.body) ? c.body : [c.body]) as Array<Record<string, unknown>>);
+}
+
+Deno.test('저장에 성공하면 백필 진도를 기록한다', async () => {
+  captured.length = 0;
+  storedChats = [];
+
+  const res = await post({
+    profile_id: '_VGAQn',
+    chats: [{ id: 777, last_log_id: '3211262568056639007', talk_user: { id: 'u7', nickname: '최지우' } }],
+    messages: [{ chat_id: '777', log: { id: 'g7', message: '문의드립니다', send_at: 1787000000000 } }],
+    backfill: { cursor: '3211262568056638001', done: false },
+  });
+
+  assertEquals(res.status, 200);
+  const w = stateWrites();
+  assertEquals(w.length, 1);
+  assertEquals(w[0].backfill_cursor, '3211262568056638001', '19자리 그대로 저장돼야 한다');
+  assertEquals(w[0].backfill_done, false);
+});
+
+Deno.test('★★ 메시지 저장이 실패하면 백필 진도도 올리지 않는다 (영구 유실 방지)', async () => {
+  // 진도만 앞서 나가면 그 구간의 상담은 다시 조회되지 않는다.
+  captured.length = 0;
+  storedChats = [];
+  failTable = 'kakao_partner_messages';
+
+  const res = await post({
+    profile_id: '_VGAQn',
+    chats: [{ id: 888, last_log_id: '3211262568056639008', talk_user: { id: 'u8', nickname: '정하늘' } }],
+    messages: [{ chat_id: '888', log: { id: 'g8', message: '중요한 문의', send_at: 1787000000000 } }],
+    backfill: { cursor: '3211262568056638001', done: true },
+  });
+  failTable = null;
+
+  assertEquals(res.status, 500);
+  assertEquals(stateWrites().length, 0, '저장이 실패했는데 진도를 올리면 그 구간이 영영 빠진다');
+});
+
+Deno.test('커서가 숫자 형식이 아니면 무시한다', async () => {
+  captured.length = 0;
+  storedChats = [];
+
+  await post({
+    profile_id: '_VGAQn',
+    chats: [],
+    messages: [],
+    backfill: { cursor: 'DROP TABLE', done: false },
+  });
+
+  const w = stateWrites();
+  assertEquals(w.length, 1);
+  assertEquals(w[0].backfill_cursor, undefined, '이상한 값은 저장하지 않는다');
+  assertEquals(w[0].backfill_done, false, 'done 은 정상값이므로 반영한다');
+});
+
+Deno.test('수집 시작 시 백필 진도를 알려준다', async () => {
+  captured.length = 0;
+  const res = await handler(new Request(
+    `https://x/functions/v1/kakao-ingest?token=${TOKEN}&profile_id=_VGAQn`,
+  ));
+  assertEquals(res.status, 200);
+  const j = await res.json();
+  assert('backfill' in j, '수집기가 이어받을 지점을 알 수 없다');
+  assertEquals(j.backfill.done, false);
+});

@@ -169,6 +169,16 @@ async function cursorsFor(profileId: string): Promise<Record<string, string>> {
   return out;
 }
 
+// 대화방 목록을 과거로 어디까지 훑었는지. 수집기가 이어받을 지점이다.
+async function backfillFor(profileId: string): Promise<{ cursor: string | null; done: boolean }> {
+  const { data, error } = await supabase
+    .from('kakao_partner_stream_state')
+    .select('backfill_cursor, backfill_done')
+    .eq('profile_id', profileId).maybeSingle();
+  if (error) { log('backfill read fail', profileId, error.message); return { cursor: null, done: false }; }
+  return { cursor: data?.backfill_cursor ?? null, done: data?.backfill_done === true };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   try {
@@ -181,7 +191,7 @@ Deno.serve(async (req: Request) => {
     if (req.method === 'GET') {
       const pid = url.searchParams.get('profile_id') || '';
       if (!ALLOWED_PROFILES.has(pid)) return json({ error: 'unknown profile_id' }, 400);
-      return json({ profile_id: pid, cursors: await cursorsFor(pid) });
+      return json({ profile_id: pid, cursors: await cursorsFor(pid), backfill: await backfillFor(pid) });
     }
 
     if (req.method !== 'POST') return json({ error: 'method not allowed' }, 405);
@@ -229,8 +239,23 @@ Deno.serve(async (req: Request) => {
     }
 
     // 누가·언제 넣었는지 기록해 "지금 수집이 살아 있나"를 화면에서 볼 수 있게 한다.
+    //
+    // ★ 백필 진도(backfill_cursor)를 여기서 함께 쓴다. 위치가 중요하다.
+    //   메시지·대화방 저장이 실패하면 그 위에서 이미 return 했으므로, 이 줄에 도달했다는 것은
+    //   보내온 내용이 전부 저장됐다는 뜻이다. 저장 전에 진도를 올리면 "받았다고 기록했는데
+    //   실제로는 없는" 구간이 생기고, 그 구간은 다시 조회되지 않는다.
+    const patch: Record<string, unknown> = {
+      profile_id: profileId,
+      last_heartbeat_at: new Date().toISOString(),
+      last_error: null,
+    };
+    const bf = body?.backfill;
+    if (bf && typeof bf === 'object') {
+      if (typeof bf.cursor === 'string' && /^\d{1,32}$/.test(bf.cursor)) patch.backfill_cursor = bf.cursor;
+      if (typeof bf.done === 'boolean') patch.backfill_done = bf.done;
+    }
     await supabase.from('kakao_partner_stream_state').upsert(
-      { profile_id: profileId, last_heartbeat_at: new Date().toISOString(), last_error: null },
+      patch,
       { onConflict: 'profile_id' },
     ).then(({ error }) => { if (error) log('heartbeat fail', error.message); });
 
